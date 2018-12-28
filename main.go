@@ -6,6 +6,7 @@ import (
 	"flag"
 	"image"
 	"image/color"
+	"image/draw"
 	_ "image/png"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -22,6 +23,7 @@ import (
 var bench bool
 var left *widget.ImageWidget
 var right *widget.ImageWidget
+var final *widget.ImageWidget
 
 func init() {
 	gob.Register(&image.NRGBA{})
@@ -180,6 +182,42 @@ func threshold(img *image.Gray) {
 	}
 }
 
+func sumLine(img *image.Gray, line int) int {
+	w := img.Bounds().Dx()
+	sum := 0
+
+	for x := 0; x < w; x++ {
+		if img.At(x, line).(color.Gray).Y > 0 {
+			sum++
+		}
+	}
+
+	return sum
+}
+
+func findLines(img *image.Gray) *image.Gray {
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	stripeH := 8
+	scale := 255.0 / float64(w * stripeH)
+
+	sums := make([]int, h)
+	for y := 0; y < h; y++ {
+		sums[y] = sumLine(img, y)
+	}
+
+	out := image.NewGray(image.Rect(0, 0, 1, h))
+	for y := h - (stripeH / 2) - 1; y > (stripeH / 2) + 1; y-- {
+		sum := 0
+		for j := 0; j < stripeH; j++ {
+			sum += sums[y + (stripeH / 2) - j]
+		}
+
+		out.Set(0, y, color.Gray{uint8(float64(sum) * scale)})
+	}
+
+	return out
+}
+
 func updateImage(fname string) {
 	inFile, err := os.Open(fname)
 	if err != nil {
@@ -198,7 +236,25 @@ func updateImage(fname string) {
 	expandContrastColWise(grad, minMax)
 	threshold(grad)
 
-	right.SetImage(grad)
+	summed := findLines(grad)
+	final.SetImage(summed)
+
+	minMax = findMinMaxColwise(summed)
+	expandContrastColWise(summed, minMax)
+	threshold(summed)
+
+	mod := image.NewRGBA(grad.Bounds())
+	draw.Draw(mod, grad.Bounds(), grad, image.ZP, draw.Src)
+
+	red := &image.Uniform{color.RGBA{0x80, 0, 0, 0x80}}
+	for y := 0; y < summed.Bounds().Dy(); y++ {
+		if summed.At(0, y).(color.Gray).Y > 0 {
+			rect := image.Rect(0, y, img.Bounds().Dy(), y + 1)
+			draw.Draw(mod, rect, red, image.ZP, draw.Over)
+		}
+	}
+
+	right.SetImage(mod)
 }
 
 func main() {
@@ -228,6 +284,7 @@ func main() {
 
 	left = widget.NewImageWidget()
 	right = widget.NewImageWidget()
+	final = widget.NewImageWidget()
 
 	idx := 0
 	updateImage(flag.Arg(idx))
@@ -271,6 +328,10 @@ func main() {
 
 		cairoSurface.Save()
 		right.Draw(cairoSurface, image.Rect(600, 50, 1100, 550))
+		cairoSurface.Restore()
+
+		cairoSurface.Save()
+		final.Draw(cairoSurface, image.Rect(1100, 50, 1150, 550))
 		cairoSurface.Restore()
 
 		// Finally draw to the screen
