@@ -10,7 +10,6 @@ import (
 	_ "image/png"
 	_ "image/gif"
 	_ "image/jpeg"
-	"math"
 	"os"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 
 	"github.com/usedbytes/mini_mouse/ui/widget"
+	"github.com/usedbytes/mini_mouse/cv"
 )
 
 var bench bool
@@ -37,109 +37,14 @@ func init() {
 	flag.BoolVar(&bench, "b", defaultBench, usageBench)
 }
 
-func absdiff_uint8(a, b uint8) int {
-	if a < b {
-		return int(b - a)
-	} else {
-		return int(a - b)
-	}
-}
-
-func deltaC(a, b color.NRGBA) uint8 {
-	deltaR := float64(absdiff_uint8(a.R, b.R))
-	deltaG := float64(absdiff_uint8(a.G, b.G))
-	deltaB := float64(absdiff_uint8(a.B, b.B))
-
-	deltaC := math.Sqrt( (2 * deltaR * deltaR) +
-			    (4 * deltaG * deltaG) +
-			    (3 * deltaB * deltaB) +
-			    (deltaR * ((deltaR * deltaR) - (deltaB * deltaB)) / 256.0))
-
-	return uint8(deltaC)
-}
-
-func rgb(in color.RGBA) color.NRGBA {
-	rNon := uint8(float64(in.R) * 255.0 / float64(in.A))
-	gNon := uint8(float64(in.G) * 255.0 / float64(in.A))
-	bNon := uint8(float64(in.B) * 255.0 / float64(in.A))
-
-	return color.NRGBA{rNon, gNon, bNon, 0xff}
-}
-
-func rgb64(in color.RGBA64) color.NRGBA {
-	rNon := uint8(float64(in.R) * 255.0 / float64(in.A))
-	gNon := uint8(float64(in.G) * 255.0 / float64(in.A))
-	bNon := uint8(float64(in.B) * 255.0 / float64(in.A))
-
-	return color.NRGBA{rNon, gNon, bNon, 0xff}
-}
-
-func absdiff(a, b color.Color) color.Gray {
-	switch aPix := a.(type) {
-	case color.NRGBA:
-		bPix := b.(color.NRGBA)
-		diff := absdiff_uint8(aPix.R, bPix.R) +
-			absdiff_uint8(aPix.G, bPix.G) +
-			absdiff_uint8(aPix.B, bPix.B)
-		return color.Gray{uint8(float64(diff) / (3))}
-	case color.RGBA:
-		bPix := b.(color.RGBA)
-
-		aNon := uint8(float64(aPix.R) * 255.0 / float64(aPix.A))
-		bNon := uint8(float64(bPix.R) * 255.0 / float64(bPix.A))
-		diff := absdiff_uint8(aNon, bNon)
-
-		aNon = uint8(float64(aPix.G) * 255.0 / float64(aPix.A))
-		bNon = uint8(float64(bPix.G) * 255.0 / float64(bPix.A))
-		diff += absdiff_uint8(aNon, bNon)
-
-		aNon = uint8(float64(aPix.B) * 255.0 / float64(aPix.A))
-		bNon = uint8(float64(bPix.B) * 255.0 / float64(bPix.A))
-		diff += absdiff_uint8(aNon, bNon)
-
-		return color.Gray{uint8(float64(diff) / (3))}
-	case color.Gray:
-		bPix := b.(color.Gray)
-		return color.Gray{uint8(absdiff_uint8(aPix.Y, bPix.Y))}
-	}
-
-	return color.Gray{0}
-}
-
-func wikidiff(a, b color.Color) color.Gray {
-	switch aPix := a.(type) {
-	case color.NRGBA:
-		bPix := b.(color.NRGBA)
-
-		return color.Gray{deltaC(aPix, bPix)}
-	case color.RGBA:
-		bPix := b.(color.RGBA)
-
-		return color.Gray{deltaC(rgb(aPix), rgb(bPix))}
-	case color.RGBA64:
-		bPix := b.(color.RGBA64)
-
-		return color.Gray{deltaC(rgb64(aPix), rgb64(bPix))}
-	case color.Gray:
-		bPix := b.(color.Gray)
-		diff := absdiff_uint8(aPix.Y, bPix.Y)
-		return color.Gray{uint8(diff)}
-	default:
-		panic(fmt.Sprintf("Unknown color type %#v", aPix))
-	}
-
-	return color.Gray{0}
-}
-
 func diffImage(in image.Image) *image.Gray {
 	w, h := in.Bounds().Dx(), in.Bounds().Dy()
 
 	out := image.NewGray(image.Rect(0, 0, w, h - 1))
 	for x := 0; x < w; x++ {
 		for y := 0; y < h - 1; y++ {
-			diff := wikidiff(in.At(x, y), in.At(x, y + 1))
-			//diff := absdiff(in.At(x, y), in.At(x, y + 1))
-			out.Set(x, y, diff)
+			diff := color.Gray{cv.DeltaC(in.At(x, y), in.At(x, y + 1))}
+			out.SetGray(x, y, diff)
 		}
 	}
 
@@ -214,10 +119,7 @@ func findLines(img *image.Gray) *image.Gray {
 	stripeH := int(float64(h) / 16)
 	scale := 255.0 / float64(w * stripeH)
 
-	sums := make([]int, h)
-	for y := 0; y < h; y++ {
-		sums[y] = sumLine(img, y)
-	}
+	sums := cv.SumLines(img)
 
 	out := image.NewGray(image.Rect(0, 0, 1, h))
 	for y := h - (stripeH / 2) - 1; y > (stripeH / 2) + 1; y-- {
@@ -246,16 +148,17 @@ func updateImage(fname string) {
 	left.SetImage(img)
 
 	grad := diffImage(img)
-	minMax := findMinMaxColwise(grad)
-	expandContrastColWise(grad, minMax)
-	threshold(grad)
+	minMax := cv.MinMaxColwise(grad)
+	cv.ExpandContrastColWise(grad, minMax)
+	cv.Threshold(grad, 128)
+	right.SetImage(grad)
 
 	summed := findLines(grad)
 	final.SetImage(summed)
 
-	minMax = findMinMaxColwise(summed)
-	expandContrastColWise(summed, minMax)
-	threshold(summed)
+	minMax = cv.MinMaxColwise(summed)
+	cv.ExpandContrastColWise(summed, minMax)
+	cv.Threshold(summed, 128)
 
 	mod := image.NewRGBA(grad.Bounds())
 	draw.Draw(mod, grad.Bounds(), grad, image.ZP, draw.Src)
