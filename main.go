@@ -66,6 +66,14 @@ func rgb(in color.RGBA) color.NRGBA {
 	return color.NRGBA{rNon, gNon, bNon, 0xff}
 }
 
+func rgb64(in color.RGBA64) color.NRGBA {
+	rNon := uint8(float64(in.R) * 255.0 / float64(in.A))
+	gNon := uint8(float64(in.G) * 255.0 / float64(in.A))
+	bNon := uint8(float64(in.B) * 255.0 / float64(in.A))
+
+	return color.NRGBA{rNon, gNon, bNon, 0xff}
+}
+
 func absdiff(a, b color.Color) color.Gray {
 	switch aPix := a.(type) {
 	case color.NRGBA:
@@ -108,10 +116,16 @@ func wikidiff(a, b color.Color) color.Gray {
 		bPix := b.(color.RGBA)
 
 		return color.Gray{deltaC(rgb(aPix), rgb(bPix))}
+	case color.RGBA64:
+		bPix := b.(color.RGBA64)
+
+		return color.Gray{deltaC(rgb64(aPix), rgb64(bPix))}
 	case color.Gray:
 		bPix := b.(color.Gray)
 		diff := absdiff_uint8(aPix.Y, bPix.Y)
 		return color.Gray{uint8(diff)}
+	default:
+		panic(fmt.Sprintf("Unknown color type %#v", aPix))
 	}
 
 	return color.Gray{0}
@@ -197,7 +211,7 @@ func sumLine(img *image.Gray, line int) int {
 
 func findLines(img *image.Gray) *image.Gray {
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-	stripeH := 8
+	stripeH := int(float64(h) / 16)
 	scale := 255.0 / float64(w * stripeH)
 
 	sums := make([]int, h)
@@ -301,6 +315,11 @@ func main() {
 				break
 			case *sdl.KeyboardEvent:
 				if ev.State == 0 {
+					if ev.Keysym.Sym == 'q' {
+						println("Quit")
+						running = false
+					}
+
 					if ev.Keysym.Sym == sdl.K_LEFT {
 						idx -= 1
 						if idx < 0 {
