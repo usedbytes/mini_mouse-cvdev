@@ -21,6 +21,7 @@ import (
 )
 
 var bench bool
+var ycbcr bool
 var left *widget.ImageWidget
 var right *widget.ImageWidget
 var final *widget.ImageWidget
@@ -32,19 +33,45 @@ func init() {
 	const (
 		defaultBench = false
 		usageBench   = "Measure drawing time"
+
+		defaultYCbCr = false
+		usageYCbCr   = "Treat RGB data as YCbCr"
 	)
 
 	flag.BoolVar(&bench, "b", defaultBench, usageBench)
+	flag.BoolVar(&ycbcr, "y", defaultYCbCr, usageYCbCr)
 }
 
 func diffImage(in image.Image) *image.Gray {
 	w, h := in.Bounds().Dx(), in.Bounds().Dy()
+	var out *image.Gray
 
-	out := image.NewGray(image.Rect(0, 0, w, h - 1))
-	for x := 0; x < w; x++ {
-		for y := 0; y < h - 1; y++ {
-			diff := color.Gray{cv.DeltaC(in.At(x, y), in.At(x, y + 1))}
-			out.SetGray(x, y, diff)
+	switch v := in.(type) {
+	case *image.YCbCr:
+		hsub, vsub := 1, 1
+		switch v.SubsampleRatio {
+		case image.YCbCrSubsampleRatio422:
+			hsub, vsub = 2, 1
+		case image.YCbCrSubsampleRatio420:
+			hsub, vsub = 2, 2
+		}
+		cols, rows := w / hsub, h / vsub
+		out = image.NewGray(image.Rect(0, 0, cols, rows - 1))
+		for x := 0; x < w; x += hsub {
+			for y := 0; y < h - 1; y += vsub {
+				s, d := v.YCbCrAt(x, y), v.YCbCrAt(x, y + vsub)
+				diff := color.Gray{cv.DeltaC(s, d)}
+				out.SetGray(x / hsub, y / vsub, diff)
+			}
+		}
+	default:
+		_ = v
+		out = image.NewGray(image.Rect(0, 0, w, h - 1))
+		for x := 0; x < w; x++ {
+			for y := 0; y < h - 1; y++ {
+				diff := color.Gray{cv.DeltaC(in.At(x, y), in.At(x, y + 1))}
+				out.SetGray(x, y, diff)
+			}
 		}
 	}
 
@@ -143,6 +170,25 @@ func updateImage(fname string) {
 	img, _, err := image.Decode(inFile)
 	if err != nil {
 		panic(err)
+	}
+
+	if ycbcr {
+		w, h := img.Bounds().Dx(), img.Bounds().Dy()
+		ycbcrImg := image.NewYCbCr(img.Bounds(), image.YCbCrSubsampleRatio420)
+
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				r, g, b, _ := img.At(x, y).RGBA()
+				yoff := ycbcrImg.YOffset(x, y)
+				coff := ycbcrImg.COffset(x, y)
+
+				ycbcrImg.Y[yoff] = byte(r >> 8)
+				ycbcrImg.Cb[coff] = byte(g >> 8)
+				ycbcrImg.Cr[coff] = byte(b >> 8)
+			}
+		}
+
+		img = ycbcrImg
 	}
 
 	left.SetImage(img)
