@@ -10,8 +10,9 @@ import (
 	"image/png"
 	_ "image/gif"
 	_ "image/jpeg"
+	"math"
 	"os"
-	"path/filepath"
+	_ "path/filepath"
 	"time"
 
 	"github.com/ungerik/go-cairo"
@@ -62,6 +63,7 @@ func writeImage(img image.Image, filename string) error {
 }
 
 func updateImage(fname string) {
+	fmt.Println(fname)
 	inFile, err := os.Open(fname)
 	if err != nil {
 		panic(err)
@@ -90,33 +92,22 @@ func updateImage(fname string) {
 
 		img = ycbcrImg
 
-		base := fname[:len(fname) - len(filepath.Ext(fname))]
-		outfile := fmt.Sprintf("%s-rgb.png", base)
-		writeImage(img, outfile)
+		//base := fname[:len(fname) - len(filepath.Ext(fname))]
+		//outfile := fmt.Sprintf("%s-rgb.png", base)
+		//writeImage(img, outfile)
 	}
 
 
-	grad := cv.DeltaCByRow(img)
-	minMax := cv.MinMaxColwise(grad)
-	cv.ExpandContrastColWise(grad, minMax)
-	cv.Threshold(grad, 128)
-
-	summed := cv.FindHorizontalLines(grad)
-	final.SetImage(summed)
-
-	minMax = cv.MinMaxColwise(summed)
-	cv.ExpandContrastColWise(summed, minMax)
-	cv.Threshold(summed, 128)
-
-	mod := image.NewRGBA(grad.Bounds())
-	draw.Draw(mod, grad.Bounds(), grad, image.ZP, draw.Src)
+	mod := image.NewRGBA(img.Bounds())
+	draw.Draw(mod, img.Bounds(), img, image.ZP, draw.Src)
 
 	red := &image.Uniform{color.RGBA{0x80, 0, 0, 0x80}}
-	for y := 0; y < summed.Bounds().Dy(); y++ {
-		if summed.At(0, y).(color.Gray).Y > 0 {
-			rect := image.Rect(0, y, img.Bounds().Dy(), y + 1)
-			draw.Draw(mod, rect, red, image.ZP, draw.Over)
-		}
+
+	horz := cv.FindHorizon(img)
+	if horz != float32(math.NaN()) {
+		y := int(float32(img.Bounds().Dy()) * horz)
+		rect := image.Rect(0, y, img.Bounds().Dy(), y + 1)
+		draw.Draw(mod, rect, red, image.ZP, draw.Over)
 	}
 
 	left.SetImage(img)
@@ -147,6 +138,15 @@ func main() {
 	}
 
 	cairoSurface := cairo.NewSurfaceFromData(sdlSurface.Data(), cairo.FORMAT_ARGB32, int(sdlSurface.W), int(sdlSurface.H), int(sdlSurface.Pitch));
+
+	grad := cairo.NewPatternLinear(cairo.Linear{0, 0, float64(windowW) / 2, float64(windowH) / 2})
+	grad.SetExtend(cairo.EXTEND_REFLECT)
+	grad.AddColorStopRGB(0, 0, 1.0, 0)
+	grad.AddColorStopRGB(1.0, 0, 0, 1.0)
+	cairoSurface.SetSource(grad)
+	grad.Destroy()
+	cairoSurface.Rectangle(0, 0, float64(windowW), float64(windowH))
+	cairoSurface.Fill()
 
 	left = widget.NewImageWidget()
 	right = widget.NewImageWidget()
@@ -202,7 +202,7 @@ func main() {
 		cairoSurface.Restore()
 
 		cairoSurface.Save()
-		final.Draw(cairoSurface, image.Rect(1100, 50, 1150, 550))
+		final.Draw(cairoSurface, image.Rect(1101, 50, 1150, 550))
 		cairoSurface.Restore()
 
 		// Finally draw to the screen
