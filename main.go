@@ -7,10 +7,11 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	_ "image/png"
+	"image/png"
 	_ "image/gif"
 	_ "image/jpeg"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ungerik/go-cairo"
@@ -42,123 +43,22 @@ func init() {
 	flag.BoolVar(&ycbcr, "y", defaultYCbCr, usageYCbCr)
 }
 
-func diffImage(in image.Image) *image.Gray {
-	w, h := in.Bounds().Dx(), in.Bounds().Dy()
-	var out *image.Gray
-
-	switch v := in.(type) {
-	case *image.YCbCr:
-		hsub, vsub := 1, 1
-		switch v.SubsampleRatio {
-		case image.YCbCrSubsampleRatio422:
-			hsub, vsub = 2, 1
-		case image.YCbCrSubsampleRatio420:
-			hsub, vsub = 2, 2
-		}
-		cols, rows := w / hsub, h / vsub
-		out = image.NewGray(image.Rect(0, 0, cols, rows - 1))
-		for x := 0; x < w; x += hsub {
-			for y := 0; y < h - 1; y += vsub {
-				s, d := v.YCbCrAt(x, y), v.YCbCrAt(x, y + vsub)
-				diff := color.Gray{cv.DeltaC(s, d)}
-				out.SetGray(x / hsub, y / vsub, diff)
-			}
-		}
-	default:
-		_ = v
-		out = image.NewGray(image.Rect(0, 0, w, h - 1))
-		for x := 0; x < w; x++ {
-			for y := 0; y < h - 1; y++ {
-				diff := color.Gray{cv.DeltaC(in.At(x, y), in.At(x, y + 1))}
-				out.SetGray(x, y, diff)
-			}
-		}
+func writeImage(img image.Image, filename string) error {
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
 	}
 
-	return out
-}
-
-func findMinMaxColwise(img *image.Gray) []image.Point {
-	ret := make([]image.Point, img.Bounds().Dx())
-	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-
-	for i := 0; i < w; i++ {
-		var min, max uint8 = 255, 0
-		for j := 0; j < h; j++ {
-			pix := img.At(i, j).(color.Gray)
-			if pix.Y < min {
-				min = pix.Y
-			}
-			if pix.Y > max {
-				max = pix.Y
-			}
-		}
-		ret[i] = image.Pt(int(max), int(min))
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		return err
 	}
 
-	return ret
-}
-
-func expandContrastColWise(img *image.Gray, minMax []image.Point) {
-	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-
-	for i := 0; i < w; i++ {
-		scale := 255.0 / float32(minMax[i].X - minMax[i].Y)
-
-		for j := 0; j < h; j++ {
-			pix := img.At(i, j).(color.Gray)
-			newVal := float32(pix.Y - uint8(minMax[i].Y)) * scale
-			img.Set(i, j, color.Gray{uint8(newVal)})
-		}
-	}
-}
-
-func threshold(img *image.Gray) {
-	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-
-	for i := 0; i < h; i++ {
-		for j := 0; j < w; j++ {
-			pix := img.At(j, i).(color.Gray)
-			if pix.Y >= 128 {
-				img.Set(j, i, color.Gray{255})
-			} else {
-				img.Set(j, i, color.Gray{0})
-			}
-		}
-	}
-}
-
-func sumLine(img *image.Gray, line int) int {
-	w := img.Bounds().Dx()
-	sum := 0
-
-	for x := 0; x < w; x++ {
-		if img.At(x, line).(color.Gray).Y > 0 {
-			sum++
-		}
+	if err := f.Close(); err != nil {
+		return err
 	}
 
-	return sum
-}
-
-func findLines(img *image.Gray) *image.Gray {
-	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-	stripeH := int(float64(h) / 16)
-	scale := 255.0 / float64(w * stripeH)
-
-	sums := cv.SumLines(img)
-
-	out := image.NewGray(image.Rect(0, 0, 1, h))
-	for y := h - (stripeH / 2) - 1; y > (stripeH / 2) + 1; y-- {
-		sum := 0
-		for j := 0; j < stripeH; j++ {
-			sum += sums[y + (stripeH / 2) - j]
-		}
-
-		out.Set(0, y, color.Gray{uint8(float64(sum) * scale)})
-	}
-
-	return out
+	return nil
 }
 
 func updateImage(fname string) {
@@ -189,17 +89,19 @@ func updateImage(fname string) {
 		}
 
 		img = ycbcrImg
+
+		base := fname[:len(fname) - len(filepath.Ext(fname))]
+		outfile := fmt.Sprintf("%s-rgb.png", base)
+		writeImage(img, outfile)
 	}
 
-	left.SetImage(img)
 
-	grad := diffImage(img)
+	grad := cv.DeltaCByRow(img)
 	minMax := cv.MinMaxColwise(grad)
 	cv.ExpandContrastColWise(grad, minMax)
 	cv.Threshold(grad, 128)
-	right.SetImage(grad)
 
-	summed := findLines(grad)
+	summed := cv.FindHorizontalLines(grad)
 	final.SetImage(summed)
 
 	minMax = cv.MinMaxColwise(summed)
@@ -217,6 +119,7 @@ func updateImage(fname string) {
 		}
 	}
 
+	left.SetImage(img)
 	right.SetImage(mod)
 }
 
