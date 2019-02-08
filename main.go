@@ -10,9 +10,11 @@ import (
 	"image/png"
 	_ "image/gif"
 	_ "image/jpeg"
-	"math"
 	"os"
+	"log"
+	"math"
 	_ "path/filepath"
+	"runtime/pprof"
 	"time"
 
 	"github.com/ungerik/go-cairo"
@@ -23,6 +25,7 @@ import (
 )
 
 var bench bool
+var profile bool
 var ycbcr bool
 var left *widget.ImageWidget
 var right *widget.ImageWidget
@@ -38,9 +41,13 @@ func init() {
 
 		defaultYCbCr = false
 		usageYCbCr   = "Treat RGB data as YCbCr"
+
+		defaultProfile = false
+		usageProfile   = "Serve CPU profile at :6060"
 	)
 
 	flag.BoolVar(&bench, "b", defaultBench, usageBench)
+	flag.BoolVar(&profile, "p", defaultProfile, usageProfile)
 	flag.BoolVar(&ycbcr, "y", defaultYCbCr, usageYCbCr)
 }
 
@@ -103,7 +110,33 @@ func updateImage(fname string) {
 
 	red := &image.Uniform{color.RGBA{0x80, 0, 0, 0x80}}
 
-	horz := cv.FindHorizon(img)
+	var horz float32
+	if profile {
+		f, err := os.Create("cpu.prof")
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+
+		start := time.Now()
+		for {
+			horz = cv.FindHorizon(img)
+			if time.Since(start) >= 5 * time.Second {
+				break
+			}
+		}
+
+		pprof.StopCPUProfile()
+		f.Close()
+		fmt.Println("Profile done")
+	} else {
+		start := time.Now()
+		horz = cv.FindHorizon(img)
+		fmt.Println(time.Since(start))
+	}
+
 	if horz != float32(math.NaN()) {
 		y := int(float32(img.Bounds().Dy()) * horz)
 		rect := image.Rect(0, y, img.Bounds().Dy(), y + 1)
