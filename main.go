@@ -69,6 +69,20 @@ func writeImage(img image.Image, filename string) error {
 	return nil
 }
 
+func runAlgorithm(in, out image.Image) {
+	horz := cv.FindHorizon(in)
+	fmt.Println(horz)
+
+	if !profile {
+		red := &image.Uniform{color.RGBA{0x80, 0, 0, 0x80}}
+		if horz != float32(math.NaN()) {
+			y := int(float32(in.Bounds().Dy()) * horz)
+			rect := image.Rect(0, y, in.Bounds().Dy(), y + 1)
+			draw.Draw(out.(draw.Image), rect, red, image.ZP, draw.Over)
+		}
+	}
+}
+
 func updateImage(fname string) {
 	fmt.Println(fname)
 	inFile, err := os.Open(fname)
@@ -108,9 +122,6 @@ func updateImage(fname string) {
 	mod := image.NewRGBA(img.Bounds())
 	draw.Draw(mod, img.Bounds(), img, image.ZP, draw.Src)
 
-	red := &image.Uniform{color.RGBA{0x80, 0, 0, 0x80}}
-
-	var horz float32
 	if profile {
 		f, err := os.Create("cpu.prof")
 		if err != nil {
@@ -122,7 +133,7 @@ func updateImage(fname string) {
 
 		start := time.Now()
 		for {
-			horz = cv.FindHorizon(img)
+			runAlgorithm(img, mod)
 			if time.Since(start) >= 5 * time.Second {
 				break
 			}
@@ -133,14 +144,8 @@ func updateImage(fname string) {
 		fmt.Println("Profile done")
 	} else {
 		start := time.Now()
-		horz = cv.FindHorizon(img)
+		runAlgorithm(img, mod)
 		fmt.Println(time.Since(start))
-	}
-
-	if horz != float32(math.NaN()) {
-		y := int(float32(img.Bounds().Dy()) * horz)
-		rect := image.Rect(0, y, img.Bounds().Dy(), y + 1)
-		draw.Draw(mod, rect, red, image.ZP, draw.Over)
 	}
 
 	left.SetImage(img)
