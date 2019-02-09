@@ -5,14 +5,12 @@ import (
 	"fmt"
 	"flag"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/png"
 	_ "image/gif"
 	_ "image/jpeg"
 	"os"
 	"log"
-	"math"
 	_ "path/filepath"
 	"runtime/pprof"
 	"time"
@@ -69,18 +67,26 @@ func writeImage(img image.Image, filename string) error {
 	return nil
 }
 
-func runAlgorithm(in, out image.Image) {
+func runAlgorithm(in, out image.Image) image.Image {
 	horz := cv.FindHorizon(in)
 	fmt.Println(horz)
 
-	if !profile {
-		red := &image.Uniform{color.RGBA{0x80, 0, 0, 0x80}}
-		if horz != float32(math.NaN()) {
-			y := int(float32(in.Bounds().Dy()) * horz)
-			rect := image.Rect(0, y, in.Bounds().Dy(), y + 1)
-			draw.Draw(out.(draw.Image), rect, red, image.ZP, draw.Over)
-		}
+	diff := cv.DeltaCByCol(in)
+	minMax := cv.MinMaxRowwise(diff)
+	cv.ExpandContrastRowWise(diff, minMax)
+	cv.Threshold(diff, 128)
+
+	for y := 0; y < diff.Bounds().Dy(); y++ {
+		blobs := cv.FindBlobs(diff.Pix[y * diff.Stride:y * diff.Stride + diff.Bounds().Dx()])
+		fmt.Println(y, ":", len(blobs))
 	}
+
+	//summed := cv.FindVerticalLines(diff)
+	//minMax = cv.MinMaxRowwise(summed)
+	//cv.ExpandContrastRowWise(summed, minMax)
+	//cv.Threshold(summed, 150)
+
+	return diff
 }
 
 func updateImage(fname string) {
@@ -119,8 +125,8 @@ func updateImage(fname string) {
 	}
 
 
-	mod := image.NewRGBA(img.Bounds())
-	draw.Draw(mod, img.Bounds(), img, image.ZP, draw.Src)
+	var mod image.Image = image.NewRGBA(img.Bounds())
+	draw.Draw(mod.(draw.Image), img.Bounds(), img, image.ZP, draw.Src)
 
 	if profile {
 		f, err := os.Create("cpu.prof")
@@ -133,7 +139,7 @@ func updateImage(fname string) {
 
 		start := time.Now()
 		for {
-			runAlgorithm(img, mod)
+			_ = runAlgorithm(img, mod)
 			if time.Since(start) >= 5 * time.Second {
 				break
 			}
@@ -144,8 +150,12 @@ func updateImage(fname string) {
 		fmt.Println("Profile done")
 	} else {
 		start := time.Now()
-		runAlgorithm(img, mod)
+		ret := runAlgorithm(img, mod)
 		fmt.Println(time.Since(start))
+
+		if ret != nil {
+			mod = ret
+		}
 	}
 
 	left.SetImage(img)
