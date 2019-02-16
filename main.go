@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"flag"
 	"image"
+	"image/color"
 	"image/draw"
 	"image/png"
 	_ "image/gif"
 	_ "image/jpeg"
+	"math"
 	"os"
 	"log"
 	_ "path/filepath"
@@ -67,18 +69,66 @@ func writeImage(img image.Image, filename string) error {
 	return nil
 }
 
-func runAlgorithm(in, out image.Image) image.Image {
-	horz := cv.FindHorizon(in)
-	fmt.Println(horz)
+func roundUp(a, to int) int {
+	return int((uint32(a) + uint32(to - 1)) & ^uint32(to - 1))
+}
 
+func runAlgorithm(in, out image.Image) image.Image {
+	// Find and amplify edges
 	diff := cv.DeltaCByCol(in)
 	minMax := cv.MinMaxRowwise(diff)
 	cv.ExpandContrastRowWise(diff, minMax)
 	cv.Threshold(diff, 128)
 
-	for y := 0; y < diff.Bounds().Dy(); y++ {
-		blobs := cv.FindBlobs(diff.Pix[y * diff.Stride:y * diff.Stride + diff.Bounds().Dx()])
-		fmt.Println(y, ":", len(blobs))
+	// Attempt to ignore noisy rows (likely above/below the target)
+	w, h := cv.ImageDims(diff)
+	for y := 0; y < h; y++ {
+		row := diff.Pix[y * diff.Stride : y * diff.Stride + w]
+		blobs := cv.FindBlobs(row)
+		if len(blobs) != 2 {
+			for x := 0; x < len(row); x++ {
+				row[x] = 0
+			}
+		}
+	}
+
+	// Find vertical lines in the non-noisy bits
+	summed := cv.FindVerticalLines(diff)
+	minMax = cv.MinMaxRowwise(summed)
+	cv.ExpandContrastRowWise(summed, minMax)
+	cv.Threshold(summed, 128)
+	fmt.Println(summed.Pix)
+
+	// Hopefully we're left with exactly two blobs, marking the edges
+	// TODO: Should handle 1 (one edge only) and 0 (full FoV filled) blob too
+	blobs := cv.FindBlobs(summed.Pix)
+	scale := in.Bounds().Dx() / len(summed.Pix)
+
+	fmt.Println("Blobs", blobs)
+
+	var target cv.Tuple
+	if len(blobs) == 2 {
+		target = cv.Tuple{
+			roundUp((blobs[0].First + blobs[0].Second) * scale / 2, 2),
+			roundUp((blobs[1].First + blobs[1].Second) * scale / 2, 2),
+		}
+	}
+
+	fmt.Println(target)
+
+	horz := cv.FindHorizonROI(in, image.Rect(target.First, 0, target.Second, in.Bounds().Dy()))
+
+	if !profile {
+		bottom := out.Bounds().Dy()
+
+		if float64(horz) != math.NaN() {
+			bottom = int(horz * float32(out.Bounds().Dy()))
+		}
+
+		red := &image.Uniform{color.RGBA{0x80, 0, 0, 0x80}}
+
+		rect := image.Rect(target.First, 0, target.Second, bottom)
+		draw.Draw(out.(draw.Image), rect, red, image.ZP, draw.Over)
 	}
 
 	//summed := cv.FindVerticalLines(diff)
@@ -86,7 +136,7 @@ func runAlgorithm(in, out image.Image) image.Image {
 	//cv.ExpandContrastRowWise(summed, minMax)
 	//cv.Threshold(summed, 150)
 
-	return diff
+	return nil
 }
 
 func updateImage(fname string) {
@@ -102,8 +152,10 @@ func updateImage(fname string) {
 	}
 
 	if ycbcr {
-		w, h := img.Bounds().Dx(), img.Bounds().Dy()
-		ycbcrImg := image.NewYCbCr(img.Bounds(), image.YCbCrSubsampleRatio420)
+		w, h := img.Bounds().Dx(), int(float64(img.Bounds().Dy()) * 0.8)
+
+		h = h - (h % 2)
+		ycbcrImg := image.NewYCbCr(image.Rect(0, 0, w, h), image.YCbCrSubsampleRatio420)
 
 		for y := 0; y < h; y++ {
 			for x := 0; x < w; x++ {
