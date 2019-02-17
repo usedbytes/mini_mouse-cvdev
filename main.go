@@ -116,7 +116,53 @@ func runAlgorithm(in, out image.Image) image.Image {
 
 	fmt.Println(target)
 
-	horz := cv.FindHorizonROI(in, image.Rect(target.First, 0, target.Second, in.Bounds().Dy()))
+	targetColor := in.(*image.YCbCr).YCbCrAt((target.First + target.Second) / 2, in.Bounds().Dy() / 2)
+	fmt.Println(targetColor)
+
+	//horz := cv.FindHorizonROI(in, image.Rect(target.First, 0, target.Second, in.Bounds().Dy()))
+	horz := float32(math.NaN())
+	roi := image.Rect(target.First, 0, target.Second, in.Bounds().Dy())
+	{
+		diff := cv.DeltaCByRowROI(in, roi)
+		minMax := cv.MinMaxColwise(diff)
+		cv.ExpandContrastColWise(diff, minMax)
+		cv.Threshold(diff, 128)
+
+		summed := cv.FindHorizontalLines(diff)
+		minMax = cv.MinMaxColwise(summed)
+		cv.ExpandContrastColWise(summed, minMax)
+		cv.Threshold(summed, 128)
+
+
+		blobs := cv.FindBlobs(summed.Pix)
+		scale := roi.Dy() / len(summed.Pix)
+
+		if len(blobs) == 0 {
+			horz = float32(math.NaN())
+			goto eh
+		}
+
+		avgs := make([]uint8, 0, len(blobs))
+		for _, b := range blobs {
+			avgs = append(avgs, cv.AverageDeltaCROIConst(in, b.First * scale, targetColor, roi))
+		}
+
+		fmt.Println("Avgs:", avgs)
+
+		min := uint8(255)
+		minIdx := -1
+		for i, m := range avgs {
+			if m < min {
+				min = m
+				minIdx = i
+			}
+		}
+
+		b := blobs[minIdx]
+		fmt.Println("Blob", minIdx, "at", b)
+		horz = float32((b.First + b.Second + 1) / 2) / float32(len(summed.Pix))
+	}
+eh:
 
 	if !profile {
 		bottom := out.Bounds().Dy()
@@ -152,7 +198,7 @@ func updateImage(fname string) {
 	}
 
 	if ycbcr {
-		w, h := img.Bounds().Dx(), int(float64(img.Bounds().Dy()) * 0.8)
+		w, h := img.Bounds().Dx(), int(float64(img.Bounds().Dy()) * 1.0)
 
 		h = h - (h % 2)
 		ycbcrImg := image.NewYCbCr(image.Rect(0, 0, w, h), image.YCbCrSubsampleRatio420)
@@ -191,7 +237,7 @@ func updateImage(fname string) {
 
 		start := time.Now()
 		for {
-			_ = runAlgorithm(img, mod)
+			_ = cv.RunAlgorithm(img, mod, profile)
 			if time.Since(start) >= 5 * time.Second {
 				break
 			}
@@ -202,7 +248,7 @@ func updateImage(fname string) {
 		fmt.Println("Profile done")
 	} else {
 		start := time.Now()
-		ret := runAlgorithm(img, mod)
+		ret := cv.RunAlgorithm(img, mod, profile)
 		fmt.Println(time.Since(start))
 
 		if ret != nil {
